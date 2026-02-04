@@ -37,7 +37,8 @@ const (
 	grafanaUsernameEnvVar = "GRAFANA_USERNAME"
 	grafanaPasswordEnvVar = "GRAFANA_PASSWORD"
 
-	grafanaExtraHeadersEnvVar = "GRAFANA_EXTRA_HEADERS"
+	grafanaExtraHeadersEnvVar          = "GRAFANA_EXTRA_HEADERS"
+	grafanaForwardRequestHeadersEnvVar = "GRAFANA_FORWARD_REQUEST_HEADERS"
 
 	grafanaURLHeader    = "X-Grafana-URL"
 	grafanaAPIKeyHeader = "X-Grafana-API-Key"
@@ -97,6 +98,55 @@ func extraHeadersFromEnv() map[string]string {
 		return nil
 	}
 	return headers
+}
+
+func forwardRequestHeadersFromEnv() []string {
+	headersStr := os.Getenv(grafanaForwardRequestHeadersEnvVar)
+	if headersStr == "" {
+		return nil
+	}
+	// Support "*" to forward all headers
+	if headersStr == "*" {
+		return []string{"*"}
+	}
+	// Parse comma-separated list
+	headers := strings.Split(headersStr, ",")
+	// Trim whitespace from each header name
+	for i := range headers {
+		headers[i] = strings.TrimSpace(headers[i])
+	}
+	return headers
+}
+
+// extractForwardedHeaders extracts headers from the incoming request based on the allowed headers list.
+// If allowedHeaders contains "*", all headers from the request are forwarded.
+// Otherwise, only headers matching the names in allowedHeaders are forwarded.
+func extractForwardedHeaders(req *http.Request, allowedHeaders []string) map[string]string {
+	if len(allowedHeaders) == 0 {
+		return nil
+	}
+
+	forwardedHeaders := make(map[string]string)
+
+	// If "*" is specified, forward all headers
+	if len(allowedHeaders) == 1 && allowedHeaders[0] == "*" {
+		for name, values := range req.Header {
+			if len(values) > 0 {
+				forwardedHeaders[name] = values[0]
+			}
+		}
+		return forwardedHeaders
+	}
+
+	// Otherwise, forward only whitelisted headers
+	for _, headerName := range allowedHeaders {
+		if headerValue := req.Header.Get(headerName); headerValue != "" {
+			forwardedHeaders[headerName] = headerValue
+			slog.Debug("Forwarding header to Grafana", "header", headerName)
+		}
+	}
+
+	return forwardedHeaders
 }
 
 func orgIdFromHeaders(req *http.Request) int64 {
@@ -363,7 +413,6 @@ func NewExtraHeadersRoundTripper(rt http.RoundTripper, headers map[string]string
 	}
 }
 
-
 func BuildTransport(cfg *GrafanaConfig, base http.RoundTripper) (http.RoundTripper, error) {
 	if base == nil {
 		base = http.DefaultTransport
@@ -472,7 +521,22 @@ var ExtractGrafanaInfoFromHeaders httpContextFunc = func(ctx context.Context, re
 	config.APIKey = apiKey
 	config.BasicAuth = basicAuth
 	config.OrgID = orgID
-	config.ExtraHeaders = extraHeadersFromEnv()
+
+	// Get extra headers from environment
+	extraHeaders := extraHeadersFromEnv()
+	if extraHeaders == nil {
+		extraHeaders = make(map[string]string)
+	}
+
+	// Extract and merge forwarded headers from incoming request
+	allowedHeaders := forwardRequestHeadersFromEnv()
+	forwardedHeaders := extractForwardedHeaders(req, allowedHeaders)
+	// Merge forwarded headers into extra headers (forwarded takes precedence)
+	for k, v := range forwardedHeaders {
+		extraHeaders[k] = v
+	}
+
+	config.ExtraHeaders = extraHeaders
 	return WithGrafanaConfig(ctx, config)
 }
 
