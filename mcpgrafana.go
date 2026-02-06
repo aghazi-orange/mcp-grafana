@@ -133,6 +133,7 @@ func extractForwardedHeaders(req *http.Request, allowedHeaders []string) map[str
 		for name, values := range req.Header {
 			if len(values) > 0 {
 				forwardedHeaders[name] = values[0]
+				slog.Debug("Forwarding header to Grafana", "header", name, "value", len(values[0]))
 			}
 		}
 		return forwardedHeaders
@@ -142,7 +143,7 @@ func extractForwardedHeaders(req *http.Request, allowedHeaders []string) map[str
 	for _, headerName := range allowedHeaders {
 		if headerValue := req.Header.Get(headerName); headerValue != "" {
 			forwardedHeaders[headerName] = headerValue
-			slog.Debug("Forwarding header to Grafana", "header", headerName)
+			slog.Debug("Forwarding header to Grafana", "header", headerName, "value", len(headerValue))
 		}
 	}
 
